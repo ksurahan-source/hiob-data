@@ -1,0 +1,53 @@
+"""공유 테이블 write 소유권 맵 (ground-truth grep, 2026-06-25).
+
+겹침 10테이블(Phase 0.4) = 여러 행성이 write. governor가 행성별 write 권한을 강제한다.
+- 기존 7: run, clip, slot, artifact, hook, asset_library_item, product
+- 신규 3(Phase 0.4): reel_metrics(metis), capi_sent_events(hermes), consent_log(janus), meta_ad_accounts(hermes)
+출처: apps/modal/workers .table() write op grep + hiob_platform 헬퍼(storage/runs/role_artifacts).
+"""
+from __future__ import annotations
+
+# 공유 10테이블: create_owner(생성 권한) + update_owners(자기 범위 갱신 허용)
+# Phase 0.4: 측정(reel_metrics, capi_sent_events), 동의(consent_log), 광고계정(meta_ad_accounts) 추가
+SHARED_TABLES: dict[str, dict] = {
+    "run":                {"create": {"atropos"},                       "update": {"athena", "hermes", "metis", "atropos"}},
+    "clip":               {"create": {"atropos"},                       "update": {"athena", "orpheus", "apollo", "atropos"}},
+    "slot":               {"create": {"atropos"},                       "update": {"athena", "orpheus", "apollo"}},
+    "artifact":           {"create": {"athena", "orpheus", "apollo", "atropos", "janus"}, "update": {"athena", "orpheus", "apollo", "atropos"}},
+    "hook":               {"create": {"ares"},                          "update": {"atropos"}},
+    "asset_library_item": {"create": {"janus"},                         "update": {"atropos", "janus"}},
+    "product":            {"create": {"janus"},                         "update": {"hermes", "janus"}},
+    "reel_metrics":       {"create": {"metis"},                         "update": {"metis"}},
+    "capi_sent_events":   {"create": {"hermes"},                        "update": {"hermes"}},
+    "consent_log":        {"create": {"janus"},                         "update": {"janus"}},
+    "meta_ad_accounts":   {"create": {"hermes"},                        "update": {"hermes"}},
+}
+
+# 배타 소유 테이블(1행성만 write) — governor는 참고용. 직접 write 허용(소유 행성만).
+EXCLUSIVE_TABLES: dict[str, str] = {
+    "timeline": "atropos", "timeline_track": "atropos", "composition_snapshot": "atropos",
+    "script_candidate": "atropos", "production_jobs": "atropos", "agent_call": "atropos",
+    "brand": "janus", "listing": "janus", "brand_voice_chunk": "janus",
+    "capi_pre_sessions": "hermes", "capi_sent_events": "hermes", "commerce_installs": "hermes",
+    "reel_metrics": "metis",
+}
+
+# audio 트랙 (slot.track 어휘) — voice/sfx는 beat_index 결박 필수(P1), music은 run-level 허용
+AUDIO_TRACKS = {"voice", "voiceover", "sfx", "music"}
+BEAT_BOUND_TRACKS = {"voice", "voiceover", "sfx"}
+_TRACK_NORMALIZE = {"voice": "voiceover", "voiceover": "voiceover", "sfx": "sfx", "music": "music"}
+
+
+def normalize_track(track: str) -> str:
+    return _TRACK_NORMALIZE.get(track, track)
+
+
+def can_write(table: str, op: str, planet: str) -> bool:
+    """planet이 table에 op(create|update)를 할 권한이 있나."""
+    planet = (planet or "").lower()
+    if table in EXCLUSIVE_TABLES:
+        return EXCLUSIVE_TABLES[table] == planet
+    rule = SHARED_TABLES.get(table)
+    if not rule:
+        return True  # 미등록 테이블 = 제약 없음(governor 밖)
+    return planet in rule.get(op, set())
