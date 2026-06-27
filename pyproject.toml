@@ -1,21 +1,19 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "hiob-data"
-version = "0.1.0"
-description = "HIOB polyrepo planet · hiob-data"
+version = "0.4.0"
+description = "HIOB 공유 테이블 governor — 10 핸드오프 테이블의 단일 write 권위(소유권+beat_index+PIPA+tenancy). 겹침이 스키마로 새는 것 봉쇄(폴리레포 Phase 0.4)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = []
 
-[project.optional-dependencies]
-dev = ["pytest>=7.0"]
-
-[tool.setuptools]
-packages = ["hiob_data"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hiob_data*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
