@@ -1,8 +1,9 @@
-"""공유 테이블 write 소유권 맵 (ground-truth grep, 2026-06-25).
+"""공유 테이블 write 소유권 맵 (ground-truth grep, 2026-06-27).
 
 겹침 10테이블(Phase 0.4) = 여러 행성이 write. governor가 행성별 write 권한을 강제한다.
 - 기존 7: run, clip, slot, artifact, hook, asset_library_item, product
 - 신규 3(Phase 0.4): reel_metrics(metis), capi_sent_events(hermes), consent_log(janus), meta_ad_accounts(hermes)
+- Phase 0.5(brand_voice): brand_voice_chunk(janus만, 테넌시 격리 강제 via DataGovernor.write_brand_voice_chunk)
 출처: apps/modal/workers .table() write op grep + hiob_platform 헬퍼(storage/runs/role_artifacts).
 """
 from __future__ import annotations

@@ -16,7 +16,7 @@ class _Resp:
 class _Q:
     def __init__(self, log, table): self._log, self._t = log, table
     def insert(self, p): self._log.append(("insert", self._t, p)); return self
-    def upsert(self, p): self._log.append(("upsert", self._t, p)); return self
+    def upsert(self, p, **kwargs): self._log.append(("upsert", self._t, p)); return self
     def update(self, p): self._log.append(("update", self._t, p)); return self
     def eq(self, *a): return self
     def execute(self): return _Resp([{"id": f"{self._t}-1"}])
@@ -139,12 +139,114 @@ def run():
     assert payload["run_id"] == "r1" and payload["roas"] == 2.5
     print("✅ reel_metrics write (metis, 측정 데이터)"); passed += 1
 
-    print(f"\n✅ {passed}/13 — governor가 P1·소유권·PIPA·테넌시를 write 시점에 강제(겹침 스키마누수 봉쇄).")
+    # 14) brand_voice_chunk 소유권: janus만 쓸 수 있음
+    try:
+        DataGovernor(FakeClient()).write_brand_voice_chunk(
+            "ares", "ws-1",
+            source_kind="website", source_ref="homepage",
+            chunk_index=0, text="Sample text", embedding=[0.1]*1536
+        )
+        assert False, "brand_voice_chunk 소유권 미차단"
+    except OwnershipError as e:
+        print("✅ brand_voice_chunk 소유권 차단(janus만):", e); passed += 1
 
+    # 15) brand_voice_chunk workspace 검증: 필수
+    try:
+        DataGovernor(FakeClient()).write_brand_voice_chunk(
+            "janus", "",  # empty workspace
+            source_kind="website", source_ref="homepage",
+            chunk_index=0, text="Sample text", embedding=[0.1]*1536
+        )
+        assert False, "workspace 검증 미차단"
+    except BindingError as e:
+        print("✅ brand_voice_chunk workspace 필수(테넌티 격리):", e); passed += 1
 
-def test_governor_enforcement():
-    """pytest entry — run() raises on any of the 13 enforcement checks failing."""
-    run()
+    # 16) brand_voice_chunk workspace=None 검증
+    try:
+        DataGovernor(FakeClient()).write_brand_voice_chunk(
+            "janus", None,  # None workspace
+            source_kind="website", source_ref="homepage",
+            chunk_index=0, text="Sample text", embedding=[0.1]*1536
+        )
+        assert False, "workspace None 검증 미차단"
+    except BindingError as e:
+        print("✅ brand_voice_chunk workspace None 거부:", e); passed += 1
+
+    # 17) janus brand_voice_chunk 단일 쓰기
+    fc7 = FakeClient(); g7 = DataGovernor(fc7)
+    chunk = g7.write_brand_voice_chunk(
+        "janus", "ws-1",
+        source_kind="website", source_ref="https://example.com/homepage",
+        chunk_index=0, text="Welcome to our site", embedding=[0.1]*1536
+    )
+    tables = [(op, t) for op, t, _ in fc7.log]
+    assert ("insert", "brand_voice_chunk") in tables
+    payload = next(p for op, t, p in fc7.log if t == "brand_voice_chunk")
+    assert payload["workspace"] == "ws-1"
+    assert payload["source_kind"] == "website"
+    assert payload["source_ref"] == "https://example.com/homepage"
+    assert payload["chunk_index"] == 0
+    print("✅ brand_voice_chunk write (janus, workspace=ws-1)"); passed += 1
+
+    # 18) text 길이 제한 검증 (4000자)
+    fc8 = FakeClient(); g8 = DataGovernor(fc8)
+    long_text = "x" * 5000
+    chunk = g8.write_brand_voice_chunk(
+        "janus", "ws-1",
+        source_kind="past_script", source_ref="script-123",
+        chunk_index=1, text=long_text, embedding=[0.2]*1536
+    )
+    payload = next(p for op, t, p in fc8.log if t == "brand_voice_chunk")
+    assert len(payload["text"]) == 4000, f"expected 4000, got {len(payload['text'])}"
+    print("✅ brand_voice_chunk text 길이 제한(4000자)"); passed += 1
+
+    # 19) brand_voice_chunks 배치 upsert: workspace 검증
+    try:
+        DataGovernor(FakeClient()).write_brand_voice_chunks(
+            "janus", "",  # empty workspace
+            rows=[{"source_kind": "website", "source_ref": "url", "chunk_index": 0,
+                   "text": "text", "embedding": [0.1]*1536}]
+        )
+        assert False
+    except BindingError as e:
+        print("✅ brand_voice_chunks batch workspace 검증:", e); passed += 1
+
+    # 20) brand_voice_chunks 배치 upsert: 소유권
+    try:
+        DataGovernor(FakeClient()).write_brand_voice_chunks(
+            "hermes", "ws-1",  # hermes not allowed
+            rows=[{"source_kind": "website", "source_ref": "url", "chunk_index": 0,
+                   "text": "text", "embedding": [0.1]*1536}]
+        )
+        assert False
+    except OwnershipError as e:
+        print("✅ brand_voice_chunks batch 소유권 차단:", e); passed += 1
+
+    # 21) brand_voice_chunks 배치 upsert 성공
+    fc9 = FakeClient(); g9 = DataGovernor(fc9)
+    rows = [
+        {"source_kind": "website", "source_ref": "site.com/page1", "chunk_index": 0,
+         "text": "First chunk", "embedding": [0.1]*1536},
+        {"source_kind": "website", "source_ref": "site.com/page1", "chunk_index": 1,
+         "text": "Second chunk", "embedding": [0.2]*1536},
+    ]
+    result = g9.write_brand_voice_chunks("janus", "ws-1", rows)
+    tables = [(op, t) for op, t, _ in fc9.log]
+    assert ("upsert", "brand_voice_chunk") in tables
+    # upsert passes a list of rows
+    op, t, payload_list = next((op, t, p) for op, t, p in fc9.log if t == "brand_voice_chunk")
+    assert isinstance(payload_list, list) and len(payload_list) == 2
+    assert payload_list[0]["workspace"] == "ws-1"
+    assert payload_list[0]["source_kind"] == "website"
+    print("✅ brand_voice_chunks batch upsert (janus, 2행)"); passed += 1
+
+    # 22) empty batch 처리
+    fc10 = FakeClient(); g10 = DataGovernor(fc10)
+    result = g10.write_brand_voice_chunks("janus", "ws-1", [])
+    assert result == []
+    print("✅ brand_voice_chunks empty batch (무시)"); passed += 1
+
+    print(f"\n✅ {passed}/22 — governor가 P1·소유권·PIPA·테넌시·브랜드보이스를 write 시점에 강제(겹침 스키마누수 봉쇄).")
 
 
 if __name__ == "__main__":

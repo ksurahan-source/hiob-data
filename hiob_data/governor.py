@@ -193,11 +193,76 @@ class DataGovernor:
         }
         return self._c.table("meta_ad_accounts").insert(payload).execute().data[0]
 
+    # ── brand_voice_chunk 거버넌스 (테넌시 격리) ──
+    def write_brand_voice_chunk(self, planet: str, workspace: str,
+                                source_kind: str, source_ref: str,
+                                chunk_index: int, text: str, embedding: list[float],
+                                **fields) -> dict:
+        """janus만 → brand_voice_chunk write. 테넌시 격리(cross-tenant poisoning 방지).
+
+        Args:
+            planet: "janus" only (브랜드 콘텐츠 소유권)
+            workspace: 워크스페이스 ID (필수, 비어있으면 거부)
+            source_kind: 'website'|'past_script'|'approved_hook'|'manual'|'transcript'|'doc'
+            source_ref: 출처 참조(e.g. URL, doc ID)
+            chunk_index: 청크 순서(다중테넌트 고유성 키 일부)
+            text: 청크 텍스트(최대 4000자 권장)
+            embedding: 임베딩 벡터(1536차원)
+
+        Raises:
+            OwnershipError: janus가 아닌 행성이 쓰려 함
+            BindingError: workspace가 없거나 비어있음 (테넌시 결박 필수)
+        """
+        self._assert("brand_voice_chunk", "create", planet)
+        if not workspace or not isinstance(workspace, str) or workspace.strip() == "":
+            raise BindingError("workspace_id 필수 — brand_voice_chunk 테넌티 격리 위반(cross-tenant 독 방지)")
+        payload = {
+            "workspace": workspace,
+            "source_kind": source_kind,
+            "source_ref": source_ref,
+            "chunk_index": chunk_index,
+            "text": text[:4000],  # enforce max length
+            "embedding": embedding,
+            **fields
+        }
+        return self._c.table("brand_voice_chunk").insert(payload).execute().data[0]
+
+    def write_brand_voice_chunks(self, planet: str, workspace: str,
+                                  rows: list[dict]) -> list[dict]:
+        """janus만 → brand_voice_chunk batch upsert. 테넌시 격리 강제.
+
+        Args:
+            planet: "janus" only
+            workspace: 워크스페이스 ID (batch 전체에 적용, 필수)
+            rows: 각 row는 {source_kind, source_ref, chunk_index, text, embedding, ...}
+
+        Returns:
+            upsert 결과 행 리스트
+
+        Raises:
+            OwnershipError: janus가 아닌 행성
+            BindingError: workspace 없음 또는 비어있음
+        """
+        self._assert("brand_voice_chunk", "create", planet)
+        if not workspace or not isinstance(workspace, str) or workspace.strip() == "":
+            raise BindingError("workspace_id 필수 — brand_voice_chunk 테넌티 격리 위반(cross-tenant 독 방지)")
+        if not rows:
+            return []
+        # 각 row에 workspace 주입 + text 길이 제한
+        enriched = [
+            {**r, "workspace": workspace, "text": r.get("text", "")[:4000]}
+            for r in rows
+        ]
+        result = self._c.table("brand_voice_chunk").upsert(
+            enriched, on_conflict="workspace,source_kind,source_ref,chunk_index"
+        ).execute()
+        return result.data or enriched
+
     # ── 테넌시 검증 (Phase 1.0 전환 준비) ──
     def assert_workspace_access(self, planet: str, workspace_id: Optional[str], table: str) -> None:
         """workspace_id 검증. Phase 0: None(단일테넌트) OK. Phase 1: 반드시 입력."""
         # Phase 0.4: 경고만(강제 아님)
-        if workspace_id is None and table in ("consent_log", "meta_ad_accounts", "reel_metrics", "capi_sent_events"):
+        if workspace_id is None and table in ("consent_log", "meta_ad_accounts", "reel_metrics", "capi_sent_events", "brand_voice_chunk"):
             import warnings
             warnings.warn(f"[Phase 1 준비] {table}에 workspace_id 필수(현재 경고만)")
 
