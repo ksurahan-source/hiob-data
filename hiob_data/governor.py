@@ -36,6 +36,33 @@ class DataGovernor:
         if not can_write(table, op, planet):
             raise OwnershipError(f"{planet}는 {table}.{op} 권한 없음 (소유권 위반)")
 
+    # ── 제네릭 governed write (2026-07-05) — 전용 메서드 없는 governed 테이블도 거버넌스 가능 ──
+    def write(self, table: str, op: str, planet: str, payload: dict,
+              *, match: Optional[dict] = None, on_conflict: Optional[str] = None) -> Any:
+        """소유권 검증 후 write. op=insert|update|upsert. `_assert`(can_write) 재사용.
+
+        13 governed 테이블 중 7종(asset_library_item·brand·product·listing·capi_pre_sessions·
+        commerce_installs·production_jobs·timeline·timeline_track·composition_snapshot·
+        script_candidate)은 전용 write_* 메서드가 없어 raw write로 우회될 수밖에 없었다. 이
+        제네릭 write로 전부 거버넌스 가능(호출자가 planet을 명시 선언 → can_write 게이트).
+        update는 match={col:val}로 .eq 필터. 위반=OwnershipError(fail-loud).
+        """
+        op = (op or "").lower()
+        op_key = "create" if op in ("insert", "upsert") else "update"
+        self._assert(table, op_key, planet)
+        q = self._c.table(table)
+        if op == "insert":
+            return q.insert(payload).execute().data
+        if op == "upsert":
+            uq = q.upsert(payload, on_conflict=on_conflict) if on_conflict else q.upsert(payload)
+            return uq.execute().data
+        if op == "update":
+            uq = q.update(payload)
+            for col, val in (match or {}).items():
+                uq = uq.eq(col, val)
+            return uq.execute().data
+        raise ValueError(f"알 수 없는 op: {op} (insert|update|upsert)")
+
     # ── run ──
     def create_run(self, planet: str, fields: dict) -> dict:
         self._assert("run", "create", planet)
