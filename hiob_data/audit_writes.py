@@ -18,7 +18,9 @@ from .ownership import EXCLUSIVE_TABLES, SHARED_TABLES
 GOVERNED_TABLES: frozenset[str] = frozenset(SHARED_TABLES) | frozenset(EXCLUSIVE_TABLES)
 
 # .table("run").insert(  /  .table('clip').update(  /  .table("hook").upsert(
-_WRITE_RE = re.compile(r"""\.table\(\s*["']([a-z_]+)["']\s*\)\s*\.\s*(insert|update|upsert)\b""")
+# B5: 테이블명 캡처를 대소문자·숫자 허용으로 넓혀 .table("Run")류 대소문자 혼용 write도 본다
+# (governed 대조는 .lower()로 정규화 — DB 테이블은 소문자 관례).
+_WRITE_RE = re.compile(r"""\.table\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\)\s*\.\s*(insert|update|upsert)\b""")
 
 
 def _owner_hint(table: str, op: str) -> str:
@@ -51,9 +53,10 @@ def scan_source(text: str, path: str = "<mem>") -> list[Violation]:
     for i, line in enumerate(text.splitlines(), start=1):
         for m in _WRITE_RE.finditer(line):
             table, op = m.group(1), m.group(2)
-            if table not in GOVERNED_TABLES:
+            tbl = table.lower()  # B5: DB 테이블은 소문자 관례 — .table("Run")도 governed로 대조.
+            if tbl not in GOVERNED_TABLES:
                 continue
-            out.append(Violation(path, i, table, op, _owner_hint(table, op), line.strip()[:100]))
+            out.append(Violation(path, i, tbl, op, _owner_hint(tbl, op), line.strip()[:100]))
     return out
 
 

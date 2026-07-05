@@ -63,3 +63,12 @@ def test_generic_write_exclusive_owner_enforced():
     DataGovernor(fc).write("timeline", "update", "atropos", {"duration_ms": 1000}, match={"id": "t1"})
     with pytest.raises(OwnershipError):
         DataGovernor(fc).write("timeline", "update", "janus", {"duration_ms": 1000}, match={"id": "t1"})
+
+
+def test_generic_write_update_without_match_raises():
+    # B4 회귀: update + match 없음 → 무필터 전체 UPDATE 방지, ValueError fail-loud.
+    fc = FakeClient()
+    with pytest.raises(ValueError):
+        DataGovernor(fc).write("listing", "update", "janus", {"attributes": {"x": 1}})
+    # .update가 실행되지 않았는지(전체 테이블 갱신 미발생) 확인.
+    assert not any(e[0] == "update" for e in fc.log)

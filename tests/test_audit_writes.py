@@ -53,3 +53,16 @@ def test_main_report_only_exit_zero(capsys):
         assert main([p, "--strict"]) == 1  # strict 차단
     out = capsys.readouterr().out
     assert "governor 우회" in out
+
+
+def test_flags_mixed_case_table_name():
+    # B5 회귀: .table("Run")(대문자 혼용)도 governed "run"으로 대조돼 잡힘(정규식 소문자 한정 수정).
+    src = 'sb.table("Run").insert(row).execute()'
+    v = scan_source(src, "app.py")
+    assert len(v) == 1
+    assert v[0].table == "run" and v[0].op == "insert"
+
+
+def test_still_ignores_truly_ungoverned_mixed_case():
+    src = 'sb.table("RandomLog").insert(x).execute()'
+    assert scan_source(src, "x.py") == []

@@ -48,6 +48,9 @@ class DataGovernor:
         update는 match={col:val}로 .eq 필터. 위반=OwnershipError(fail-loud).
         """
         op = (op or "").lower()
+        # B4: update는 match(=WHERE) 필수 — 없으면 무필터 update가 전체 테이블을 덮어씀. fail-loud.
+        if op == "update" and not match:
+            raise ValueError('update는 match 필수 (예: match={"id": run_id}) — 무필터 전체갱신 방지')
         op_key = "create" if op in ("insert", "upsert") else "update"
         self._assert(table, op_key, planet)
         q = self._c.table(table)
