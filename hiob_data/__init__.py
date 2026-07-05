@@ -18,9 +18,11 @@ Phase 0.5 추가 (brand_voice 거버넌스):
 """
 from .governor import DataGovernor, OwnershipError, BindingError
 from .ownership import can_write, SHARED_TABLES, EXCLUSIVE_TABLES, normalize_track
+from .audit_writes import GOVERNED_TABLES, Violation, scan_source, scan_paths
 
 __all__ = [
     "DataGovernor", "OwnershipError", "BindingError",
     "can_write", "SHARED_TABLES", "EXCLUSIVE_TABLES", "normalize_track",
+    "GOVERNED_TABLES", "Violation", "scan_source", "scan_paths",
 ]
 __version__ = "0.4.0"
