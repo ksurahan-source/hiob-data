@@ -43,6 +43,22 @@ def normalize_track(track: str) -> str:
     return _TRACK_NORMALIZE.get(track, track)
 
 
+# governor가 아는 전체 테이블(공유 ∪ 배타). generic write()는 이 집합 밖 테이블을 거부한다
+# (SEC-8, 2026-07-06): can_write는 미등록 테이블에 True를 주므로, generic 경로가 열린 뒷문이
+# 되지 않도록 write()가 멤버십을 별도 강제.
+GOVERNED_TABLES: frozenset[str] = frozenset(SHARED_TABLES) | frozenset(EXCLUSIVE_TABLES)
+
+# workspace_id 결박이 필수인 테넌시-민감 테이블(Phase 1). HIOB_TENANCY_STRICT=1이면 강제.
+TENANCY_TABLES: frozenset[str] = frozenset(
+    {"consent_log", "meta_ad_accounts", "reel_metrics", "capi_sent_events", "brand_voice_chunk"}
+)
+
+
+def is_governed_table(table: str) -> bool:
+    """governor가 소유권을 아는 테이블인가 (generic write 멤버십 게이트)."""
+    return table in GOVERNED_TABLES
+
+
 def can_write(table: str, op: str, planet: str) -> bool:
     """planet이 table에 op(create|update)를 할 권한이 있나."""
     planet = (planet or "").lower()

@@ -13,10 +13,19 @@ actual DB 호출은 주입된 client(supabase)에 위임 — governor는 enforce
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 from datetime import datetime
 
-from .ownership import can_write, normalize_track, BEAT_BOUND_TRACKS, AUDIO_TRACKS
+from .ownership import (
+    can_write, normalize_track, BEAT_BOUND_TRACKS, AUDIO_TRACKS,
+    is_governed_table, TENANCY_TABLES,
+)
+
+
+def _tenancy_strict() -> bool:
+    """HIOB_TENANCY_STRICT=1|true|yes → Phase 1 테넌시 강제(workspace_id 필수). 기본 off=경고만."""
+    return os.environ.get("HIOB_TENANCY_STRICT", "").lower() in ("1", "true", "yes")
 
 
 class OwnershipError(PermissionError):
@@ -48,11 +57,26 @@ class DataGovernor:
         update는 match={col:val}로 .eq 필터. 위반=OwnershipError(fail-loud).
         """
         op = (op or "").lower()
+        # SEC-8(2026-07-06): generic 경로가 거버넌스 뒷문이 되지 않게 멤버십 강제. can_write는
+        # 미등록 테이블에 True를 주므로(ownership.py:53), 여기서 governed 테이블만 허용 — 오타·
+        # 미거버넌스 테이블이 generic write로 새는 것을 fail-loud 차단. 특화 메서드는 영향 없음.
+        if not is_governed_table(table):
+            raise OwnershipError(
+                f"'{table}'는 거버넌스 등록 테이블 아님 — generic write() 거부. "
+                f"SHARED/EXCLUSIVE_TABLES에 등록 후 사용(우회 방지)."
+            )
         # B4: update는 match(=WHERE) 필수 — 없으면 무필터 update가 전체 테이블을 덮어씀. fail-loud.
         if op == "update" and not match:
             raise ValueError('update는 match 필수 (예: match={"id": run_id}) — 무필터 전체갱신 방지')
         op_key = "create" if op in ("insert", "upsert") else "update"
         self._assert(table, op_key, planet)
+        # SEC-4(2026-07-06): 테넌시 민감 테이블에 workspace_id 결박(strict 모드). 기본 off=경고만.
+        # op별 소스 분리(적대감사 CRITICAL-1): insert/upsert는 payload가 workspace를 실어야 하고,
+        # update는 match(WHERE)가 workspace로 스코프돼야 한다. update의 workspace를 payload로 받으면
+        # 무스코프 WHERE로 남의 테넌트 행을 자기 workspace로 재지정하는 탈취가 가능 → match만 신뢰.
+        if table in TENANCY_TABLES:
+            ws = (match or {}).get("workspace_id") if op == "update" else (payload or {}).get("workspace_id")
+            self.assert_workspace_access(planet, ws, table)
         q = self._c.table(table)
         if op == "insert":
             return q.insert(payload).execute().data
@@ -149,6 +173,7 @@ class DataGovernor:
     def write_reel_metric(self, planet: str, run_id: str, workspace_id: Optional[str] = None, **fields) -> dict:
         """metis만 → reel_metrics write. 측정 데이터 저장."""
         self._assert("reel_metrics", "create", planet)
+        self.assert_workspace_access(planet, workspace_id, "reel_metrics")  # SEC-4 strict 게이트
         payload = {"run_id": run_id, "workspace_id": workspace_id, **fields}
         return self._c.table("reel_metrics").insert(payload).execute().data[0]
 
@@ -163,6 +188,10 @@ class DataGovernor:
         self._assert("reel_metrics", "create", planet)
         if not rows:
             return []
+        # SEC-4: strict 모드면 각 row의 workspace_id 결박 확인(배치 cross-tenant 방지).
+        if _tenancy_strict():
+            for r in rows:
+                self.assert_workspace_access(planet, r.get("workspace_id"), "reel_metrics")
         result = self._c.table("reel_metrics").upsert(rows, on_conflict=on_conflict).execute()
         return result.data or rows
 
@@ -174,9 +203,7 @@ class DataGovernor:
         self._assert("capi_sent_events", "create", planet)
         if not pipa_consent:
             raise BindingError(f"PIPA §17 동의 없음 — CAPI 이벤트 전송 불가(법규 위반)")
-        if workspace_id is None:
-            import warnings
-            warnings.warn("[Phase 1 준비] write_capi_event에 workspace_id 필수(현재 경고만)")
+        self.assert_workspace_access(planet, workspace_id, "capi_sent_events")  # SEC-4 strict 게이트
         payload = {"pipa_consent": pipa_consent, **fields}
         if workspace_id is not None:
             payload["workspace_id"] = workspace_id
@@ -290,9 +317,18 @@ class DataGovernor:
 
     # ── 테넌시 검증 (Phase 1.0 전환 준비) ──
     def assert_workspace_access(self, planet: str, workspace_id: Optional[str], table: str) -> None:
-        """workspace_id 검증. Phase 0: None(단일테넌트) OK. Phase 1: 반드시 입력."""
-        # Phase 0.4: 경고만(강제 아님)
-        if workspace_id is None and table in ("consent_log", "meta_ad_accounts", "reel_metrics", "capi_sent_events", "brand_voice_chunk"):
+        """workspace_id 검증. Phase 0: None(단일테넌트) OK. Phase 1: 반드시 입력.
+
+        SEC-4(2026-07-06): HIOB_TENANCY_STRICT=1이면 테넌시 테이블에 workspace_id 없을 시 raise
+        (fail-closed·cross-tenant write 차단). 기본 off=경고만(현행 유지·byte-identical). founder가
+        Phase 1 준비되면 env 하나로 전환 — 라이브 단일테넌트 write를 지금 깨지 않는다.
+        """
+        missing = (workspace_id is None or (isinstance(workspace_id, str) and not workspace_id.strip()))
+        if missing and table in TENANCY_TABLES:
+            if _tenancy_strict():
+                raise BindingError(
+                    f"[TENANCY_STRICT] {table}에 workspace_id 필수 — cross-tenant write 차단(fail-closed)."
+                )
             import warnings
             warnings.warn(f"[Phase 1 준비] {table}에 workspace_id 필수(현재 경고만)")
 

@@ -72,3 +72,68 @@ def test_generic_write_update_without_match_raises():
         DataGovernor(fc).write("listing", "update", "janus", {"attributes": {"x": 1}})
     # .update가 실행되지 않았는지(전체 테이블 갱신 미발생) 확인.
     assert not any(e[0] == "update" for e in fc.log)
+
+
+# ── SEC-8: 미거버넌스 테이블은 generic write로 우회 불가 ──
+def test_generic_write_unmapped_table_rejected():
+    # can_write는 미등록 테이블에 True를 주지만, generic write()는 멤버십을 강제해 차단.
+    fc = FakeClient()
+    with pytest.raises(OwnershipError):
+        DataGovernor(fc).write("random_secret_table", "insert", "janus", {"x": 1})
+    assert not any(e[0] == "insert" for e in fc.log)  # write 미발생
+
+
+# ── SEC-4: 테넌시 strict 모드 ──
+def test_tenancy_default_off_allows_missing_workspace(monkeypatch):
+    # 기본(off): consent_log에 workspace_id 없어도 통과(경고만·byte-identical).
+    monkeypatch.delenv("HIOB_TENANCY_STRICT", raising=False)
+    fc = FakeClient()
+    r = DataGovernor(fc).write("consent_log", "insert", "janus", {"user_id": "u1", "consent_type": "marketing"})
+    assert r == [{"id": "consent_log-1"}]
+
+
+def test_tenancy_strict_blocks_missing_workspace(monkeypatch):
+    monkeypatch.setenv("HIOB_TENANCY_STRICT", "1")
+    fc = FakeClient()
+    from hiob_data.governor import BindingError
+    with pytest.raises(BindingError):
+        DataGovernor(fc).write("consent_log", "insert", "janus", {"user_id": "u1"})
+    assert not any(e[0] == "insert" for e in fc.log)  # cross-tenant write 차단
+
+
+def test_tenancy_strict_allows_with_workspace(monkeypatch):
+    monkeypatch.setenv("HIOB_TENANCY_STRICT", "1")
+    fc = FakeClient()
+    r = DataGovernor(fc).write("consent_log", "insert", "janus",
+                               {"workspace_id": "ws_hiob", "user_id": "u1"})
+    assert r == [{"id": "consent_log-1"}]
+
+
+def test_tenancy_strict_write_capi_event(monkeypatch):
+    monkeypatch.setenv("HIOB_TENANCY_STRICT", "1")
+    fc = FakeClient()
+    from hiob_data.governor import BindingError
+    with pytest.raises(BindingError):
+        DataGovernor(fc).write_capi_event("hermes", None, True, event_id="e1")
+
+
+# CRITICAL-1(적대감사): update의 workspace는 match(WHERE)에서만 신뢰 — payload로 받으면 탈취 가능.
+def test_tenancy_strict_update_workspace_from_match_ok(monkeypatch):
+    monkeypatch.setenv("HIOB_TENANCY_STRICT", "1")
+    fc = FakeClient()
+    # WHERE가 workspace로 스코프됨 → 허용.
+    DataGovernor(fc).write("consent_log", "update", "janus", {"granted": False},
+                           match={"workspace_id": "ws1", "id": "log-1"})
+    assert any(e[0] == "update" for e in fc.log)
+
+
+def test_tenancy_strict_update_workspace_only_in_payload_blocked(monkeypatch):
+    monkeypatch.setenv("HIOB_TENANCY_STRICT", "1")
+    fc = FakeClient()
+    from hiob_data.governor import BindingError
+    # payload엔 workspace 있으나 WHERE는 id만 → 무스코프 재지정 위험 → 차단.
+    with pytest.raises(BindingError):
+        DataGovernor(fc).write("consent_log", "update", "janus",
+                               {"workspace_id": "attacker_ws", "granted": True},
+                               match={"id": "log-1"})
+    assert not any(e[0] == "update" for e in fc.log)
