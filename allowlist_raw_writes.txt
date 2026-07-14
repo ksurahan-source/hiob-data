@@ -1,12 +1,8 @@
 # DataGovernor raw-write allowlist — SHRINK ONLY
 # format: relpath:line:table:op
-# regenerated 2026-07-14 total=21 workers=0 scripts=21
-# workers/app production path: ZERO raw governed writes (migrated to DataGovernor)
-# scripts/* ops/smoke only — listed so --strict fails on NEW script hits
+# 2026-07-14: include delete ops; shrink-only thereafter
 
-# (no worker entries)
-
-# ── scripts ──
+apps/modal/app.py:742:capi_pre_sessions:delete
 apps/modal/scripts/assemble_reel.py:67:run:insert
 apps/modal/scripts/campaign_hooks.py:79:run:insert
 apps/modal/scripts/e2e_instrumentation_run.py:190:script_candidate:update
@@ -24,7 +20,9 @@ apps/modal/scripts/render_smoke.py:230:run:update
 apps/modal/scripts/social_proof_scene.py:104:run:insert
 apps/modal/scripts/verify_a3_local.py:167:run:insert
 apps/modal/scripts/verify_a3_local.py:180:reel_metrics:insert
+apps/modal/scripts/verify_a3_local.py:231:run:delete
 apps/modal/scripts/verify_a3_produce_local.py:40:run:insert
 apps/modal/scripts/verify_a3_produce_local.py:47:reel_metrics:insert
 apps/modal/scripts/verify_a3_produce_local.py:54:run:insert
+apps/modal/scripts/verify_a3_produce_local.py:92:run:delete
 apps/modal/scripts/verify_r2_regen_proof_beats.py:59:slot:update
