@@ -22,20 +22,25 @@ GOVERNED_TABLES: frozenset[str] = frozenset(SHARED_TABLES) | frozenset(EXCLUSIVE
 # B5: 테이블명 캡처를 대소문자·숫자 허용으로 넓혀 .table("Run")류 대소문자 혼용 write도 본다
 # (governed 대조는 .lower()로 정규화 — DB 테이블은 소문자 관례).
 # B6: multi-line `.table("run")\n  .update(` — join next non-empty line when chain incomplete.
+# B7: include .delete() — raw-write scanner previously missed deletes (DB audit FAIL).
 _WRITE_RE = re.compile(
-    r"""\.(?:table|from)\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\)\s*\.\s*(insert|update|upsert)\b"""
+    r"""\.(?:table|from)\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\)\s*\.\s*(insert|update|upsert|delete)\b"""
 )
 _TABLE_OPEN_RE = re.compile(
     r"""\.(?:table|from)\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\)\s*$"""
 )
-_OP_ONLY_RE = re.compile(r"""^\s*\.\s*(insert|update|upsert)\b""")
+_OP_ONLY_RE = re.compile(r"""^\s*\.\s*(insert|update|upsert|delete)\b""")
 
 
 def _owner_hint(table: str, op: str) -> str:
     if table in EXCLUSIVE_TABLES:
         return f"exclusive→{EXCLUSIVE_TABLES[table]}"
     rule = SHARED_TABLES.get(table, {})
-    key = "create" if op in ("insert", "upsert") else "update"
+    if op == "delete":
+        # delete treated as update-class ownership for shared tables
+        key = "update"
+    else:
+        key = "create" if op in ("insert", "upsert") else "update"
     owners = ", ".join(sorted(rule.get(key, set()))) or "?"
     return f"shared {key}→{{{owners}}}"
 

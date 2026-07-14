@@ -2,7 +2,7 @@
 
 겹침 10테이블(Phase 0.4) = 여러 행성이 write. governor가 행성별 write 권한을 강제한다.
 - 기존 7: run, clip, slot, artifact, hook, asset_library_item, product
-- 신규 3(Phase 0.4): reel_metrics(metis), capi_sent_events(hermes), consent_log(janus), meta_ad_accounts(hermes)
+- 신규 3(Phase 0.4): reel_metrics(metis), capi_sent_events(hermes), consent_log(hermes), meta_ad_accounts(hermes)
 - Phase 0.5(brand_voice): brand_voice_chunk(janus만, 테넌시 격리 강제 via DataGovernor.write_brand_voice_chunk)
 - hermes CAPI: capi_pre_sessions·capi_sent_events·commerce_installs 배타 소유
   (purge_expired_capi_sessions → DataGovernor.delete("capi_pre_sessions", "hermes", ...))
@@ -22,7 +22,8 @@ SHARED_TABLES: dict[str, dict] = {
     "product":            {"create": {"janus"},                         "update": {"hermes", "janus"}},
     "reel_metrics":       {"create": {"metis"},                         "update": {"metis"}},
     "capi_sent_events":   {"create": {"hermes"},                        "update": {"hermes"}},
-    "consent_log":        {"create": {"janus"},                         "update": {"janus"}},
+    # consent_log = Hermes/CAPI (OWNERSHIP.toml SSOT) — was wrongly janus here (audit conflict)
+    "consent_log":        {"create": {"hermes"},                        "update": {"hermes"}},
     "meta_ad_accounts":   {"create": {"hermes"},                        "update": {"hermes"}},
 }
 
