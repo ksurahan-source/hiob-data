@@ -1,0 +1,59 @@
+# hiob-data ownership SSOT (PRD DATA-01) — machine-readable
+# Generated authority: Python maps in hiob_data/ownership.py must match this file.
+# Version: 2026-07-14
+schema: hiob.db_ownership.v1
+authority: hiob-data
+updated: 2026-07-14
+
+exclusive:
+  timeline: atropos
+  timeline_track: atropos
+  composition_snapshot: atropos
+  script_candidate: atropos
+  production_jobs: atropos
+  agent_call: atropos
+  brand: janus
+  listing: janus
+  brand_voice_chunk: janus
+  capi_pre_sessions: hermes
+  commerce_installs: hermes
+
+shared:
+  run:
+    create: [atropos]
+    update: [athena, hermes, metis, atropos]
+  clip:
+    create: [atropos]
+    update: [athena, orpheus, apollo, atropos]
+  slot:
+    create: [atropos]
+    update: [athena, orpheus, apollo]
+  artifact:
+    create: [athena, orpheus, apollo, atropos, janus]
+    update: [athena, orpheus, apollo, atropos]
+  hook:
+    create: [ares]
+    update: [atropos]
+  asset_library_item:
+    create: [janus]
+    update: [atropos, janus]
+  product:
+    create: [janus]
+    update: [hermes, janus]
+  reel_metrics:
+    create: [metis]
+    update: [metis]
+  capi_sent_events:
+    create: [hermes]
+    update: [hermes]
+  consent_log:
+    create: [hermes]
+    update: [hermes]
+  meta_ad_accounts:
+    create: [hermes]
+    update: [hermes]
+
+runtime_policy:
+  service_role_allowed: false   # target; transitional break-glass only
+  per_planet_credentials: required  # Phase 2 incomplete until enforced
+  tenancy_column: workspace_id
