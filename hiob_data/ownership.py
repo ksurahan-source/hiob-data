@@ -4,6 +4,8 @@
 - 기존 7: run, clip, slot, artifact, hook, asset_library_item, product
 - 신규 3(Phase 0.4): reel_metrics(metis), capi_sent_events(hermes), consent_log(janus), meta_ad_accounts(hermes)
 - Phase 0.5(brand_voice): brand_voice_chunk(janus만, 테넌시 격리 강제 via DataGovernor.write_brand_voice_chunk)
+- hermes CAPI: capi_pre_sessions·capi_sent_events·commerce_installs 배타 소유
+  (purge_expired_capi_sessions → DataGovernor.delete("capi_pre_sessions", "hermes", ...))
 출처: apps/modal/workers .table() write op grep + hiob_platform 헬퍼(storage/runs/role_artifacts).
 """
 from __future__ import annotations
@@ -24,12 +26,16 @@ SHARED_TABLES: dict[str, dict] = {
     "meta_ad_accounts":   {"create": {"hermes"},                        "update": {"hermes"}},
 }
 
-# 배타 소유 테이블(1행성만 write) — governor는 참고용. 직접 write 허용(소유 행성만).
+# 배타 소유 테이블(1행성만 write) — can_write/is_governed_table이 강제(create·update·delete).
+# hermes: CAPI pre-session PII + sent events + commerce installs (TTL purge 포함).
 EXCLUSIVE_TABLES: dict[str, str] = {
     "timeline": "atropos", "timeline_track": "atropos", "composition_snapshot": "atropos",
     "script_candidate": "atropos", "production_jobs": "atropos", "agent_call": "atropos",
     "brand": "janus", "listing": "janus", "brand_voice_chunk": "janus",
-    "capi_pre_sessions": "hermes", "capi_sent_events": "hermes", "commerce_installs": "hermes",
+    # hermes CAPI / commerce (delete 허용 — exclusive owner = any op)
+    "capi_pre_sessions": "hermes",
+    "capi_sent_events": "hermes",
+    "commerce_installs": "hermes",
     "reel_metrics": "metis",
 }
 

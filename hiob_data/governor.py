@@ -90,6 +90,81 @@ class DataGovernor:
             return uq.execute().data
         raise ValueError(f"알 수 없는 op: {op} (insert|update|upsert)")
 
+    def update_where(
+        self,
+        table: str,
+        planet: str,
+        payload: dict,
+        *,
+        match: Optional[dict] = None,
+        match_in: Optional[dict] = None,
+        or_filter: Optional[str] = None,
+    ) -> Any:
+        """소유권 검증 후 multi-eq / multi-in / or_ update.
+
+        match={col: val} → .eq · match_in={col: [v1,v2]} → .in_
+        or_filter → PostgREST .or_(...) 문자열 (예: "motion_id.is.null,motion_status.eq.failed")
+        match/match_in/or_filter 중 하나 이상 필수(무필터 전체 갱신 금지).
+        """
+        if not match and not match_in and not or_filter:
+            raise ValueError("update_where는 match|match_in|or_filter 필수 — 무필터 전체갱신 방지")
+        self._assert(table, "update", planet)
+        if table in TENANCY_TABLES:
+            ws = (match or {}).get("workspace_id")
+            self.assert_workspace_access(planet, ws, table)
+        uq = self._c.table(table).update(payload)
+        for col, val in (match or {}).items():
+            uq = uq.eq(col, val)
+        for col, vals in (match_in or {}).items():
+            uq = uq.in_(col, list(vals) if not isinstance(vals, list) else vals)
+        if or_filter:
+            uq = uq.or_(or_filter)
+        return uq.execute().data
+
+    def update_run(self, planet: str, run_id: str, **fields) -> Any:
+        """run row update by id (athena|hermes|metis|atropos)."""
+        if not run_id:
+            raise ValueError("run_id 필수")
+        return self.write("run", "update", planet, dict(fields), match={"id": run_id})
+
+    def delete(
+        self,
+        table: str,
+        planet: str,
+        *,
+        match: Optional[dict] = None,
+        match_in: Optional[dict] = None,
+        match_lt: Optional[dict] = None,
+    ) -> Any:
+        """Owned delete — match|match_in|match_lt required (never unscoped full-table delete).
+
+        Permission: exclusive owner, or shared-table create/update owner (delete ≈ update).
+        match_lt={col: val} → .lt(col, val) (e.g. capi_pre_sessions TTL purge by expires_at).
+        Call: delete("capi_pre_sessions", "hermes", match_lt={"expires_at": iso_now}).
+        """
+        if not match and not match_in and not match_lt:
+            raise ValueError("delete는 match|match_in|match_lt 필수 — 무필터 전체삭제 방지")
+        if not is_governed_table(table):
+            raise OwnershipError(
+                f"'{table}'는 거버넌스 등록 테이블 아님 — delete() 거부."
+            )
+        # Prefer update permission; fall back to create (owners who materialize may prune).
+        try:
+            self._assert(table, "update", planet)
+        except OwnershipError:
+            self._assert(table, "create", planet)
+        if table in TENANCY_TABLES:
+            ws = (match or {}).get("workspace_id")
+            self.assert_workspace_access(planet, ws, table)
+        dq = self._c.table(table).delete()
+        for col, val in (match or {}).items():
+            dq = dq.eq(col, val)
+        for col, vals in (match_in or {}).items():
+            dq = dq.in_(col, list(vals) if not isinstance(vals, list) else vals)
+        for col, val in (match_lt or {}).items():
+            dq = dq.lt(col, val)
+        return dq.execute().data
+
     # ── run ──
     def create_run(self, planet: str, fields: dict) -> dict:
         self._assert("run", "create", planet)
@@ -139,6 +214,32 @@ class DataGovernor:
         self._assert("clip", "create", planet)
         payload = {"track_id": track_id, **fields}
         return self._c.table("clip").insert(payload).execute().data[0]
+
+    def update_clip(self, planet: str, clip_id: str, **fields) -> Any:
+        """clip row update by id. athena|orpheus|apollo|atropos.
+
+        Phase 1 이관: 워커가 sb.table('clip').update(...).eq('id', ...) 대신 이 경로를 쓴다.
+        """
+        if not clip_id:
+            raise ValueError("clip_id 필수")
+        return self.write("clip", "update", planet, dict(fields), match={"id": clip_id})
+
+    def create_timeline(self, planet: str, **fields) -> dict:
+        """timeline insert = atropos 전용 (variant clone 등)."""
+        self._assert("timeline", "create", planet)
+        data = self._c.table("timeline").insert(fields).execute().data or []
+        if not data:
+            raise RuntimeError("timeline insert 빈 응답")
+        return data[0]
+
+    def create_timeline_track(self, planet: str, timeline_id: str, **fields) -> dict:
+        """timeline_track insert = atropos 전용."""
+        self._assert("timeline_track", "create", planet)
+        payload = {"timeline_id": timeline_id, **fields}
+        data = self._c.table("timeline_track").insert(payload).execute().data or []
+        if not data:
+            raise RuntimeError("timeline_track insert 빈 응답")
+        return data[0]
 
     # ── artifact (미디어/오디오 실파일) ──
     def write_artifact(self, planet: str, run_id: str, slot_id: Optional[str], **fields) -> dict:

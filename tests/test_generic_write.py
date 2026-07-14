@@ -14,7 +14,10 @@ class _Q:
     def insert(self, p): self._log.append(("insert", self._t, p)); return self
     def upsert(self, p, **kw): self._log.append(("upsert", self._t, p, kw)); return self
     def update(self, p): self._log.append(("update", self._t, p)); return self
+    def delete(self): self._log.append(("delete", self._t)); return self
     def eq(self, *a): self._log.append(("eq", self._t, a)); return self
+    def in_(self, *a): self._log.append(("in_", self._t, a)); return self
+    def lt(self, *a): self._log.append(("lt", self._t, a)); return self
     def execute(self): return _Resp([{"id": f"{self._t}-1"}])
 
 
@@ -137,3 +140,34 @@ def test_tenancy_strict_update_workspace_only_in_payload_blocked(monkeypatch):
                                {"workspace_id": "attacker_ws", "granted": True},
                                match={"id": "log-1"})
     assert not any(e[0] == "update" for e in fc.log)
+
+
+# ── delete: hermes owns capi_pre_sessions (TTL purge path) ──
+def test_delete_capi_pre_sessions_hermes_owner_ok():
+    """purge_expired_capi_sessions → delete(table, planet, match_lt=expires_at)."""
+    from hiob_data.ownership import EXCLUSIVE_TABLES, is_governed_table, can_write
+
+    assert is_governed_table("capi_pre_sessions")
+    assert EXCLUSIVE_TABLES["capi_pre_sessions"] == "hermes"
+    assert can_write("capi_pre_sessions", "update", "hermes")
+
+    fc = FakeClient()
+    r = DataGovernor(fc).delete(
+        "capi_pre_sessions", "hermes",
+        match_lt={"expires_at": "2026-07-14T00:00:00+00:00"},
+    )
+    assert r == [{"id": "capi_pre_sessions-1"}]
+    assert ("delete", "capi_pre_sessions") in fc.log
+    assert ("lt", "capi_pre_sessions", ("expires_at", "2026-07-14T00:00:00+00:00")) in fc.log
+
+
+def test_delete_capi_pre_sessions_non_owner_blocked():
+    with pytest.raises(OwnershipError):
+        DataGovernor(FakeClient()).delete(
+            "capi_pre_sessions", "janus", match={"id": "s1"},
+        )
+
+
+def test_delete_requires_scope():
+    with pytest.raises(ValueError):
+        DataGovernor(FakeClient()).delete("capi_pre_sessions", "hermes")
