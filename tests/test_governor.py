@@ -19,6 +19,8 @@ class _Q:
     def upsert(self, p, **kwargs): self._log.append(("upsert", self._t, p)); return self
     def update(self, p): self._log.append(("update", self._t, p)); return self
     def eq(self, *a): return self
+    def in_(self, *a): return self
+    def or_(self, *a): return self
     def execute(self): return _Resp([{"id": f"{self._t}-1"}])
 
 
@@ -27,8 +29,52 @@ class FakeClient:
     def table(self, t): return _Q(self.log, t)
 
 
+def test_update_clip_and_timeline_helpers():
+    """Phase 1: update_clip / create_timeline / create_timeline_track ownership."""
+    fc = FakeClient()
+    g = DataGovernor(fc)
+    g.update_clip("apollo", "clip-1", volume=0.5)
+    assert any(op == "update" and t == "clip" for op, t, _ in fc.log)
+    try:
+        DataGovernor(FakeClient()).update_clip("metis", "c1", volume=1)
+        assert False, "metis must not update clip"
+    except OwnershipError:
+        pass
+    fc2 = FakeClient()
+    g2 = DataGovernor(fc2)
+    g2.create_timeline("atropos", run_id="r1", duration_ms=1000)
+    g2.create_timeline_track("atropos", "tl-1", kind="video", ord=0)
+    assert any(t == "timeline" for _, t, _ in fc2.log)
+    assert any(t == "timeline_track" for _, t, _ in fc2.log)
+    try:
+        DataGovernor(FakeClient()).create_timeline("janus", run_id="x")
+        assert False
+    except OwnershipError:
+        pass
+    # update_where with match_in + or_filter
+    fc3 = FakeClient()
+    g3 = DataGovernor(fc3)
+    g3.update_where(
+        "clip", "orpheus", {"volume": 0.2},
+        match={"start_ms": 0},
+        match_in={"track_id": ["t1", "t2"]},
+    )
+    g3.update_where(
+        "asset_library_item", "janus", {"motion_status": "pending"},
+        match={"id": "a1"},
+        or_filter="motion_id.is.null,motion_status.eq.failed",
+    )
+    try:
+        DataGovernor(FakeClient()).update_where("clip", "orpheus", {"x": 1})
+        assert False, "must require match"
+    except ValueError:
+        pass
+
+
 def run():
     passed = 0
+    test_update_clip_and_timeline_helpers()
+    print("✅ update_clip/create_timeline helpers"); passed += 1
 
     # 1) ★P1: voice 오디오 beat_index 없으면 거부 (소유권보다 먼저)
     try:

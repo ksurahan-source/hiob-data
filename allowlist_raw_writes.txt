@@ -1,0 +1,30 @@
+# DataGovernor raw-write allowlist — SHRINK ONLY
+# format: relpath:line:table:op
+# regenerated 2026-07-14 total=21 workers=0 scripts=21
+# workers/app production path: ZERO raw governed writes (migrated to DataGovernor)
+# scripts/* ops/smoke only — listed so --strict fails on NEW script hits
+
+# (no worker entries)
+
+# ── scripts ──
+apps/modal/scripts/assemble_reel.py:67:run:insert
+apps/modal/scripts/campaign_hooks.py:79:run:insert
+apps/modal/scripts/e2e_instrumentation_run.py:190:script_candidate:update
+apps/modal/scripts/e2e_instrumentation_run.py:195:run:update
+apps/modal/scripts/ingest_aradol_dance.py:105:brand:update
+apps/modal/scripts/ingest_sfx_library.py:174:asset_library_item:upsert
+apps/modal/scripts/ingest_sfx_library.py:183:asset_library_item:upsert
+apps/modal/scripts/ops_ingest_viewok_phaseA.py:135:product:update
+apps/modal/scripts/ops_ingest_viewok_phaseA.py:83:asset_library_item:update
+apps/modal/scripts/ops_ingest_viewok_phaseA.py:95:listing:update
+apps/modal/scripts/place_library_video.py:109:run:insert
+apps/modal/scripts/prove_vertical_reels.py:71:brand:update
+apps/modal/scripts/render_smoke.py:196:run:insert
+apps/modal/scripts/render_smoke.py:230:run:update
+apps/modal/scripts/social_proof_scene.py:104:run:insert
+apps/modal/scripts/verify_a3_local.py:167:run:insert
+apps/modal/scripts/verify_a3_local.py:180:reel_metrics:insert
+apps/modal/scripts/verify_a3_produce_local.py:40:run:insert
+apps/modal/scripts/verify_a3_produce_local.py:47:reel_metrics:insert
+apps/modal/scripts/verify_a3_produce_local.py:54:run:insert
+apps/modal/scripts/verify_r2_regen_proof_beats.py:59:slot:update

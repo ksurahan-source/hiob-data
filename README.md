@@ -17,4 +17,14 @@ g.write_audio("orpheus", run_id, "voice", 2, slot_id, key)  # P1: beat 없으면
 - music = run-level 허용(beat_index None OK).
 
 ## 상태
-Phase 0.3 — 신규 additive 모듈(기존 코드 미수정). 검증: py_compile + 5/5 enforce 테스트(live DB 없이 FakeClient). 다음(Phase 1): 워커가 직접 write → governor 호출로 마이그레이션(team.py sync_clips_from_slots 우선 = P1 라이브 봉쇄).
+Phase 0.5 — write 권위 + audit + 점진 이관. 검증: FakeClient enforce 테스트 + audit_writes.
+
+### Phase 1 이관 완료 (2026-07-14 Ralph)
+- `update_clip` / `update_run` / `update_where` / `create_timeline` / `create_timeline_track`
+- Modal workers + `app.py` **governed raw write = 0** (audit_writes --strict exit 0)
+- allowlist empty — 재유입 시 CI 즉시 실패
+
+```bash
+# CI gate (must be zero)
+python -m hiob_data.audit_writes --strict apps/modal/workers apps/modal/app.py
+```
