@@ -31,7 +31,8 @@ SHARED_TABLES: dict[str, dict] = {
 # hermes: CAPI pre-session PII + sent events + commerce installs (TTL purge 포함).
 EXCLUSIVE_TABLES: dict[str, str] = {
     "timeline": "atropos", "timeline_track": "atropos", "composition_snapshot": "atropos",
-    "script_candidate": "atropos", "production_jobs": "atropos", "agent_call": "atropos",
+    "script_candidate": "atropos", "production_jobs": "atropos", "render_jobs": "atropos",
+    "agent_call": "atropos",
     "brand": "janus", "listing": "janus", "brand_voice_chunk": "janus",
     # hermes CAPI / commerce (delete 허용 — exclusive owner = any op)
     "capi_pre_sessions": "hermes",
