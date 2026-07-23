@@ -1,7 +1,10 @@
 """D4 foundation: ownership SSOT forbids service_role; ledger migration present."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from hiob_data.ownership_ssot import load_ownership_manifest, manifest_path
 
@@ -15,13 +18,19 @@ def test_runtime_policy_forbids_service_role():
     assert "hermes" in str(m.get("exclusive") or {}) or "capi_pre_sessions" in raw
 
 
-def test_migration_0096_exists_and_creates_roles():
-    roots = [
-        Path.home() / "hiob" / "infra" / "migrations" / "0096_planet_roles_rls_foundation.sql",
-        Path(__file__).resolve().parents[3] / "hiob" / "infra" / "migrations" / "0096_planet_roles_rls_foundation.sql",
-    ]
-    path = next((p for p in roots if p.is_file()), None)
-    assert path is not None, f"migration 0096 missing in {roots}"
+def test_migration_0096_when_schema_checkout_provided():
+    schema_root = os.environ.get("HIOB_SCHEMA_ROOT")
+    if not schema_root:
+        pytest.skip(
+            "cross-repo schema check requires an explicit HIOB_SCHEMA_ROOT"
+        )
+    path = (
+        Path(schema_root)
+        / "infra"
+        / "migrations"
+        / "0096_planet_roles_rls_foundation.sql"
+    )
+    assert path.is_file(), f"migration 0096 missing at {path}"
     text = path.read_text(encoding="utf-8")
     assert "hiob_planet_" in text
     assert "NOBYPASSRLS" in text
