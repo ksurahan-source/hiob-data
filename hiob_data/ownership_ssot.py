@@ -34,7 +34,13 @@ def load_ownership_manifest() -> dict[str, Any]:
 def _minimal_yaml(text: str) -> dict[str, Any]:
     """Tiny YAML subset loader if PyYAML unavailable — enough for structure checks."""
     # Prefer real yaml; if missing, return structural stubs from known keys
-    out: dict[str, Any] = {"schema": "hiob.db_ownership.v1", "exclusive": {}, "shared": {}}
+    out: dict[str, Any] = {
+        "schema": "hiob.db_ownership.v1",
+        "exclusive": {},
+        "shared": {},
+        "create_only": {},
+        "tenancy_required": {},
+    }
     section = None
     for line in text.splitlines():
         if line.startswith("schema:"):
@@ -43,9 +49,19 @@ def _minimal_yaml(text: str) -> dict[str, Any]:
             section = "exclusive"
         elif line.startswith("shared:"):
             section = "shared"
-        elif section == "exclusive" and line.startswith("  ") and ":" in line and not line.strip().startswith("#"):
+        elif line.startswith("create_only:"):
+            section = "create_only"
+        elif line.startswith("tenancy_required:"):
+            section = "tenancy_required"
+        elif (
+            section in {"exclusive", "create_only", "tenancy_required"}
+            and line.startswith("  ")
+            and not line.startswith("    ")
+            and ":" in line
+            and not line.strip().startswith("#")
+        ):
             k, v = line.strip().split(":", 1)
-            out["exclusive"][k.strip()] = v.strip()
+            out[section][k.strip()] = v.strip()
     return out
 
 

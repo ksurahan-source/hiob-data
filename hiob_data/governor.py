@@ -19,6 +19,7 @@ from datetime import datetime
 
 from .ownership import (
     can_write, normalize_track, BEAT_BOUND_TRACKS, AUDIO_TRACKS,
+    CREATE_ONLY_TABLES,
     is_governed_table, TENANCY_TABLES,
 )
 
@@ -68,7 +69,10 @@ class DataGovernor:
         # B4: update는 match(=WHERE) 필수 — 없으면 무필터 update가 전체 테이블을 덮어씀. fail-loud.
         if op == "update" and not match:
             raise ValueError('update는 match 필수 (예: match={"id": run_id}) — 무필터 전체갱신 방지')
-        op_key = "create" if op in ("insert", "upsert") else "update"
+        if table in CREATE_ONLY_TABLES:
+            op_key = "create" if op == "insert" else op
+        else:
+            op_key = "create" if op in ("insert", "upsert") else "update"
         self._assert(table, op_key, planet)
         # SEC-4(2026-07-06): 테넌시 민감 테이블에 workspace_id 결박(strict 모드). 기본 off=경고만.
         # op별 소스 분리(적대감사 CRITICAL-1): insert/upsert는 payload가 workspace를 실어야 하고,
@@ -148,11 +152,14 @@ class DataGovernor:
             raise OwnershipError(
                 f"'{table}'는 거버넌스 등록 테이블 아님 — delete() 거부."
             )
-        # Prefer update permission; fall back to create (owners who materialize may prune).
-        try:
-            self._assert(table, "update", planet)
-        except OwnershipError:
-            self._assert(table, "create", planet)
+        if table in CREATE_ONLY_TABLES:
+            self._assert(table, "delete", planet)
+        else:
+            # Prefer update permission; fall back to create (owners who materialize may prune).
+            try:
+                self._assert(table, "update", planet)
+            except OwnershipError:
+                self._assert(table, "create", planet)
         if table in TENANCY_TABLES:
             ws = (match or {}).get("workspace_id")
             self.assert_workspace_access(planet, ws, table)
@@ -421,15 +428,14 @@ class DataGovernor:
         """workspace_id 검증. Phase 0: None(단일테넌트) OK. Phase 1: 반드시 입력.
 
         SEC-4(2026-07-06): HIOB_TENANCY_STRICT=1이면 테넌시 테이블에 workspace_id 없을 시 raise
-        (fail-closed·cross-tenant write 차단). 기본 off=경고만(현행 유지·byte-identical). founder가
-        Phase 1 준비되면 env 하나로 전환 — 라이브 단일테넌트 write를 지금 깨지 않는다.
+        (fail-closed·cross-tenant write 차단). 기본 off=기존 테이블은 경고만(현행 유지).
+        신규 append-only revision 테이블은 환경 플래그와 무관하게 항상 fail-closed한다.
         """
-        missing = (workspace_id is None or (isinstance(workspace_id, str) and not workspace_id.strip()))
+        missing = not isinstance(workspace_id, str) or not workspace_id.strip()
         if missing and table in TENANCY_TABLES:
-            if _tenancy_strict():
+            if _tenancy_strict() or table in CREATE_ONLY_TABLES:
                 raise BindingError(
                     f"[TENANCY_STRICT] {table}에 workspace_id 필수 — cross-tenant write 차단(fail-closed)."
                 )
             import warnings
             warnings.warn(f"[Phase 1 준비] {table}에 workspace_id 필수(현재 경고만)")
-

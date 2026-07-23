@@ -89,6 +89,55 @@ def test_render_jobs_updates_are_atropos_exclusive_and_scoped():
         )
 
 
+@pytest.mark.parametrize("table", ["ares_script_revisions", "ares_beat_plan_revisions"])
+def test_revision_tables_are_insert_only_and_tenant_bound(monkeypatch, table):
+    from hiob_data.governor import BindingError
+
+    # Revision artifacts are always tenant-bound, even during the legacy
+    # HIOB_TENANCY_STRICT=0 transition used by older governed tables.
+    monkeypatch.delenv("HIOB_TENANCY_STRICT", raising=False)
+
+    for invalid_workspace_id in (None, "", "   ", 123, ["ws-1"]):
+        with pytest.raises(BindingError):
+            DataGovernor(FakeClient()).write(
+                table,
+                "insert",
+                "atropos",
+                {"id": "rev-1", "workspace_id": invalid_workspace_id},
+            )
+
+    fc = FakeClient()
+    result = DataGovernor(fc).write(
+        table,
+        "insert",
+        "atropos",
+        {"id": "rev-1", "workspace_id": "ws-1"},
+    )
+    assert result == [{"id": f"{table}-1"}]
+
+    with pytest.raises(OwnershipError):
+        DataGovernor(FakeClient()).write(
+            table,
+            "update",
+            "atropos",
+            {"digest": "changed"},
+            match={"id": "rev-1", "workspace_id": "ws-1"},
+        )
+    with pytest.raises(OwnershipError):
+        DataGovernor(FakeClient()).write(
+            table,
+            "upsert",
+            "atropos",
+            {"id": "rev-1", "workspace_id": "ws-1"},
+        )
+    with pytest.raises(OwnershipError):
+        DataGovernor(FakeClient()).delete(
+            table,
+            "atropos",
+            match={"id": "rev-1", "workspace_id": "ws-1"},
+        )
+
+
 def test_generic_write_update_without_match_raises():
     # B4 회귀: update + match 없음 → 무필터 전체 UPDATE 방지, ValueError fail-loud.
     fc = FakeClient()

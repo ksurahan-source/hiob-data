@@ -27,11 +27,14 @@ SHARED_TABLES: dict[str, dict] = {
     "meta_ad_accounts":   {"create": {"hermes"},                        "update": {"hermes"}},
 }
 
-# 배타 소유 테이블(1행성만 write) — can_write/is_governed_table이 강제(create·update·delete).
+# 배타 소유 테이블(1행성만 write) — can_write/is_governed_table이 강제.
 # hermes: CAPI pre-session PII + sent events + commerce installs (TTL purge 포함).
 EXCLUSIVE_TABLES: dict[str, str] = {
     "timeline": "atropos", "timeline_track": "atropos", "composition_snapshot": "atropos",
-    "script_candidate": "atropos", "production_jobs": "atropos", "render_jobs": "atropos",
+    "script_candidate": "atropos",
+    "ares_script_revisions": "atropos",
+    "ares_beat_plan_revisions": "atropos",
+    "production_jobs": "atropos", "render_jobs": "atropos",
     "agent_call": "atropos",
     "brand": "janus", "listing": "janus", "brand_voice_chunk": "janus",
     # hermes CAPI / commerce (delete 허용 — exclusive owner = any op)
@@ -40,6 +43,13 @@ EXCLUSIVE_TABLES: dict[str, str] = {
     "commerce_installs": "hermes",
     "reel_metrics": "metis",
 }
+
+# Append-only revision tables expose create only. This operation policy closes
+# generic DataGovernor update/upsert/delete paths in addition to naming Atropos
+# as the exclusive writer.
+CREATE_ONLY_TABLES: frozenset[str] = frozenset(
+    {"ares_script_revisions", "ares_beat_plan_revisions"}
+)
 
 # audio 트랙 (slot.track 어휘) — voice/sfx는 beat_index 결박 필수(P1), music은 run-level 허용
 AUDIO_TRACKS = {"voice", "voiceover", "sfx", "music"}
@@ -56,9 +66,18 @@ def normalize_track(track: str) -> str:
 # 되지 않도록 write()가 멤버십을 별도 강제.
 GOVERNED_TABLES: frozenset[str] = frozenset(SHARED_TABLES) | frozenset(EXCLUSIVE_TABLES)
 
-# workspace_id 결박이 필수인 테넌시-민감 테이블(Phase 1). HIOB_TENANCY_STRICT=1이면 강제.
+# workspace_id 결박이 필수인 테넌시-민감 테이블. 기존 테이블은 Phase 1 strict
+# 플래그로 강제하며 create-only revision 테이블은 항상 강제한다.
 TENANCY_TABLES: frozenset[str] = frozenset(
-    {"consent_log", "meta_ad_accounts", "reel_metrics", "capi_sent_events", "brand_voice_chunk"}
+    {
+        "consent_log",
+        "meta_ad_accounts",
+        "reel_metrics",
+        "capi_sent_events",
+        "brand_voice_chunk",
+        "ares_script_revisions",
+        "ares_beat_plan_revisions",
+    }
 )
 
 
@@ -70,6 +89,9 @@ def is_governed_table(table: str) -> bool:
 def can_write(table: str, op: str, planet: str) -> bool:
     """planet이 table에 op(create|update)를 할 권한이 있나."""
     planet = (planet or "").lower()
+    op = (op or "").lower()
+    if table in CREATE_ONLY_TABLES and op != "create":
+        return False
     if table in EXCLUSIVE_TABLES:
         return EXCLUSIVE_TABLES[table] == planet
     rule = SHARED_TABLES.get(table)

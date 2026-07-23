@@ -1,15 +1,18 @@
 # hiob-data ownership SSOT (PRD DATA-01) — machine-readable
 # Generated authority: Python maps in hiob_data/ownership.py must match this file.
-# Version: 2026-07-14
+# Version: 2026-07-23
 schema: hiob.db_ownership.v1
 authority: hiob-data
-updated: 2026-07-14
+updated: 2026-07-23
 
 exclusive:
   timeline: atropos
   timeline_track: atropos
   composition_snapshot: atropos
   script_candidate: atropos
+  # Atropos is the exclusive writer; create-only policy below blocks mutations.
+  ares_script_revisions: atropos
+  ares_beat_plan_revisions: atropos
   production_jobs: atropos
   agent_call: atropos
   brand: janus
@@ -17,6 +20,17 @@ exclusive:
   brand_voice_chunk: janus
   capi_pre_sessions: hermes
   commerce_installs: hermes
+
+# Append-only operation policy. Exclusive owner may insert but cannot
+# update/upsert/delete through DataGovernor.
+create_only:
+  ares_script_revisions: create
+  ares_beat_plan_revisions: create
+
+# Tenant binding policy for the new revision artifacts.
+tenancy_required:
+  ares_script_revisions: workspace_id
+  ares_beat_plan_revisions: workspace_id
 
 shared:
   run:
