@@ -45,6 +45,42 @@ def _owner_hint(table: str, op: str) -> str:
     return f"shared {key}→{{{owners}}}"
 
 
+def _violation(path: str, line_number: int, table: str, op: str, snippet: str) -> "Violation":
+    return Violation(path, line_number, table, op, _owner_hint(table, op), snippet[:100])
+
+
+def _direct_violations(line: str, path: str, line_number: int) -> list["Violation"]:
+    violations: list[Violation] = []
+    for match in _WRITE_RE.finditer(line):
+        table, op = match.group(1).lower(), match.group(2)
+        if table in GOVERNED_TABLES:
+            violations.append(_violation(path, line_number, table, op, line.strip()))
+    return violations
+
+
+def _multiline_violation(
+    lines: list[str],
+    index: int,
+    path: str,
+) -> "Violation | None":
+    if index + 1 >= len(lines):
+        return None
+    table_match = _TABLE_OPEN_RE.search(lines[index])
+    operation_match = _OP_ONLY_RE.match(lines[index + 1])
+    if not table_match or not operation_match:
+        return None
+    table = table_match.group(1).lower()
+    if table not in GOVERNED_TABLES:
+        return None
+    operation = operation_match.group(1)
+    snippet = f"{lines[index].strip()} {lines[index + 1].strip()}"
+    return _violation(path, index + 1, table, operation, snippet)
+
+
+def _same_write(left: "Violation", right: "Violation") -> bool:
+    return (left.line, left.table, left.op) == (right.line, right.table, right.op)
+
+
 @dataclass(frozen=True)
 class Violation:
     path: str
@@ -64,26 +100,12 @@ def scan_source(text: str, path: str = "<mem>") -> list[Violation]:
         return []  # governor 구현 자신은 정당한 write
     out: list[Violation] = []
     lines = text.splitlines()
-    for i, line in enumerate(lines, start=1):
-        for m in _WRITE_RE.finditer(line):
-            table, op = m.group(1), m.group(2)
-            tbl = table.lower()  # B5: DB 테이블은 소문자 관례 — .table("Run")도 governed로 대조.
-            if tbl not in GOVERNED_TABLES:
-                continue
-            out.append(Violation(path, i, tbl, op, _owner_hint(tbl, op), line.strip()[:100]))
-        # B6 multi-line chain: .table("run")  next: .update(
-        open_m = _TABLE_OPEN_RE.search(line)
-        if open_m and i < len(lines):
-            nxt = lines[i]  # 0-index next = line i (1-indexed next is i+1)
-            op_m = _OP_ONLY_RE.match(nxt)
-            if op_m:
-                tbl = open_m.group(1).lower()
-                if tbl in GOVERNED_TABLES:
-                    op = op_m.group(1)
-                    snippet = f"{line.strip()} {nxt.strip()}"[:100]
-                    # de-dupe if same line already matched (shouldn't for open-only)
-                    if not any(v.line == i and v.table == tbl and v.op == op for v in out):
-                        out.append(Violation(path, i, tbl, op, _owner_hint(tbl, op), snippet))
+    for index, line in enumerate(lines):
+        direct = _direct_violations(line, path, index + 1)
+        out.extend(direct)
+        multiline = _multiline_violation(lines, index, path)
+        if multiline and not any(_same_write(item, multiline) for item in direct):
+            out.append(multiline)
     return out
 
 
@@ -132,68 +154,99 @@ def violation_key(v: Violation, *, root: Path | None = None) -> str:
     return f"{path}:{v.line}:{v.table}:{v.op}"
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = list(argv if argv is not None else sys.argv[1:])
+def _parse_args(args: list[str]) -> tuple[bool, str | None, str | None, list[str]]:
     strict = "--strict" in args
     allowlist_path = None
     root = None
     paths: list[str] = []
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == "--strict":
-            i += 1
+    index = 0
+    value_options = {"--allowlist", "--root"}
+    while index < len(args):
+        argument = args[index]
+        if argument in value_options and index + 1 < len(args):
+            value = args[index + 1]
+            if argument == "--allowlist":
+                allowlist_path = value
+            else:
+                root = value
+            index += 2
             continue
-        if a == "--allowlist" and i + 1 < len(args):
-            allowlist_path = args[i + 1]
-            i += 2
-            continue
-        if a == "--root" and i + 1 < len(args):
-            root = args[i + 1]
-            i += 2
-            continue
-        if a.startswith("--"):
-            i += 1
-            continue
-        paths.append(a)
-        i += 1
-    if not paths:
-        paths = ["."]
+        if not argument.startswith("--"):
+            paths.append(argument)
+        index += 1
+    return strict, allowlist_path, root, paths or ["."]
+
+
+def _allowlist_keys(violation: Violation, root: Path | None) -> tuple[str, str, str]:
+    full_key = violation_key(violation, root=root)
+    if root is None:
+        short_key = f"{Path(violation.path).name}:{violation.line}"
+    else:
+        short_key = f"{Path(full_key.split(':')[0]).as_posix()}:{violation.line}"
+    basename_key = f"{Path(violation.path).name}:{violation.line}:{violation.table}:{violation.op}"
+    return full_key, short_key, basename_key
+
+
+def _is_allowed(violation: Violation, allowlist: set[str], root: Path | None) -> bool:
+    keys = _allowlist_keys(violation, root)
+    normalized = keys[0].replace("\\", "/")
+    return any(key in allowlist for key in keys) or any(
+        candidate.replace("\\", "/") == normalized for candidate in allowlist
+    )
+
+
+def _partition_violations(
+    violations: list[Violation],
+    allowlist: set[str],
+    root: Path | None,
+) -> tuple[list[Violation], int]:
+    new_violations = [item for item in violations if not _is_allowed(item, allowlist, root)]
+    return new_violations, len(violations) - len(new_violations)
+
+
+def _print_report(
+    violations: list[Violation],
+    new_violations: list[Violation],
+    *,
+    strict: bool,
+    allowlist_path: str | None,
+    allowlist: set[str],
+    allowed_hits: int,
+) -> None:
+    print(f"⚠️  governed 테이블 raw write {len(violations)}건 (allowlist 흡수 {allowed_hits} · 신규/미허용 {len(new_violations)}):")
+    shown = new_violations if strict and allowlist else violations
+    for violation in shown:
+        print("  " + violation.format())
+    by_table: dict[str, int] = {}
+    counted = new_violations if strict and allowlist else violations
+    for violation in counted:
+        by_table[violation.table] = by_table.get(violation.table, 0) + 1
+    if by_table:
+        summary = sorted(by_table.items(), key=lambda item: -item[1])
+        print("  ── 테이블별:", ", ".join(f"{table}={count}" for table, count in summary))
+    if allowlist_path:
+        print(f"  ── allowlist: {allowlist_path} ({len(allowlist)} entries, hits={allowed_hits})")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(argv if argv is not None else sys.argv[1:])
+    strict, allowlist_path, root, paths = _parse_args(args)
     violations = scan_paths(paths)
     allow = load_allowlist(allowlist_path) if allowlist_path else set()
     root_p = Path(root) if root else None
-
-    new_violations: list[Violation] = []
-    allowed_hits = 0
-    for v in violations:
-        key = violation_key(v, root=root_p)
-        # full key or path:line prefix match
-        short = f"{Path(v.path).name}:{v.line}" if root_p is None else f"{Path(key.split(':')[0]).as_posix()}:{v.line}"
-        rel_key = violation_key(v, root=root_p)
-        basename_key = f"{Path(v.path).name}:{v.line}:{v.table}:{v.op}"
-        if rel_key in allow or key in allow or basename_key in allow or short in allow:
-            allowed_hits += 1
-            continue
-        # also accept path:line:table:op with forward slashes normalized
-        if any(k.replace("\\", "/") == rel_key.replace("\\", "/") for k in allow):
-            allowed_hits += 1
-            continue
-        new_violations.append(v)
+    new_violations, allowed_hits = _partition_violations(violations, allow, root_p)
 
     if not violations:
         print("✅ governor 우회 raw write 없음")
         return 0
-    print(f"⚠️  governed 테이블 raw write {len(violations)}건 (allowlist 흡수 {allowed_hits} · 신규/미허용 {len(new_violations)}):")
-    show = new_violations if (strict and allow) else violations
-    for v in show:
-        print("  " + v.format())
-    by_table: dict[str, int] = {}
-    for v in (new_violations if strict and allow else violations):
-        by_table[v.table] = by_table.get(v.table, 0) + 1
-    if by_table:
-        print("  ── 테이블별:", ", ".join(f"{t}={n}" for t, n in sorted(by_table.items(), key=lambda x: -x[1])))
-    if allowlist_path:
-        print(f"  ── allowlist: {allowlist_path} ({len(allow)} entries, hits={allowed_hits})")
+    _print_report(
+        violations,
+        new_violations,
+        strict=strict,
+        allowlist_path=allowlist_path,
+        allowlist=allow,
+        allowed_hits=allowed_hits,
+    )
     # --strict: allowlist 있으면 신규만 실패, 없으면 전체 실패
     if not strict:
         return 0
