@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .ownership import (
     can_write, normalize_track, BEAT_BOUND_TRACKS, AUDIO_TRACKS,
@@ -334,7 +334,7 @@ class DataGovernor:
             "user_id": user_id,
             "consent_type": consent_type,
             "granted": granted,
-            "recorded_at": datetime.utcnow().isoformat(),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
             **fields
         }
         return self._c.table("consent_log").insert(payload).execute().data[0]
