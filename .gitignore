@@ -4,4 +4,6 @@ __pycache__/
 *.pyc
 dist/
 build/
-*.egg-info
+.coverage
+.pytest_cache/
+coverage.xml
