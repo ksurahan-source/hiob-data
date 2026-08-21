@@ -29,6 +29,39 @@ def _tenancy_strict() -> bool:
     return os.environ.get("HIOB_TENANCY_STRICT", "").lower() in ("1", "true", "yes")
 
 
+def _write_operation_key(table: str, op: str) -> str:
+    if table in CREATE_ONLY_TABLES:
+        return "create" if op == "insert" else op
+    return "create" if op in ("insert", "upsert") else "update"
+
+
+def _workspace_for_write(op: str, payload: dict, match: Optional[dict]) -> Any:
+    source = match if op == "update" else payload
+    return (source or {}).get("workspace_id")
+
+
+def _apply_eq_filters(query: Any, match: Optional[dict]) -> Any:
+    for column, value in (match or {}).items():
+        query = query.eq(column, value)
+    return query
+
+
+def _apply_scope_filters(
+    query: Any,
+    *,
+    match: Optional[dict],
+    match_in: Optional[dict],
+    match_lt: Optional[dict] = None,
+) -> Any:
+    query = _apply_eq_filters(query, match)
+    for column, values in (match_in or {}).items():
+        normalized = values if isinstance(values, list) else list(values)
+        query = query.in_(column, normalized)
+    for column, value in (match_lt or {}).items():
+        query = query.lt(column, value)
+    return query
+
+
 class OwnershipError(PermissionError):
     """행성이 권한 없는 테이블/연산을 write하려 함."""
 
@@ -45,6 +78,38 @@ class DataGovernor:
     def _assert(self, table: str, op: str, planet: str) -> None:
         if not can_write(table, op, planet):
             raise OwnershipError(f"{planet}는 {table}.{op} 권한 없음 (소유권 위반)")
+
+    def _execute_write(
+        self,
+        table: str,
+        op: str,
+        payload: dict,
+        *,
+        match: Optional[dict],
+        on_conflict: Optional[str],
+    ) -> Any:
+        query = self._c.table(table)
+        if op == "insert":
+            return query.insert(payload).execute().data
+        if op == "upsert":
+            query = (
+                query.upsert(payload, on_conflict=on_conflict)
+                if on_conflict
+                else query.upsert(payload)
+            )
+            return query.execute().data
+        if op == "update":
+            return _apply_eq_filters(query.update(payload), match).execute().data
+        raise ValueError(f"알 수 없는 op: {op} (insert|update|upsert)")
+
+    def _assert_delete_permission(self, table: str, planet: str) -> None:
+        if table in CREATE_ONLY_TABLES:
+            self._assert(table, "delete", planet)
+        else:
+            try:
+                self._assert(table, "update", planet)
+            except OwnershipError:
+                self._assert(table, "create", planet)
 
     # ── 제네릭 governed write (2026-07-05) — 전용 메서드 없는 governed 테이블도 거버넌스 가능 ──
     def write(self, table: str, op: str, planet: str, payload: dict,
@@ -69,30 +134,24 @@ class DataGovernor:
         # B4: update는 match(=WHERE) 필수 — 없으면 무필터 update가 전체 테이블을 덮어씀. fail-loud.
         if op == "update" and not match:
             raise ValueError('update는 match 필수 (예: match={"id": run_id}) — 무필터 전체갱신 방지')
-        if table in CREATE_ONLY_TABLES:
-            op_key = "create" if op == "insert" else op
-        else:
-            op_key = "create" if op in ("insert", "upsert") else "update"
-        self._assert(table, op_key, planet)
+        self._assert(table, _write_operation_key(table, op), planet)
         # SEC-4(2026-07-06): 테넌시 민감 테이블에 workspace_id 결박(strict 모드). 기본 off=경고만.
         # op별 소스 분리(적대감사 CRITICAL-1): insert/upsert는 payload가 workspace를 실어야 하고,
         # update는 match(WHERE)가 workspace로 스코프돼야 한다. update의 workspace를 payload로 받으면
         # 무스코프 WHERE로 남의 테넌트 행을 자기 workspace로 재지정하는 탈취가 가능 → match만 신뢰.
         if table in TENANCY_TABLES:
-            ws = (match or {}).get("workspace_id") if op == "update" else (payload or {}).get("workspace_id")
-            self.assert_workspace_access(planet, ws, table)
-        q = self._c.table(table)
-        if op == "insert":
-            return q.insert(payload).execute().data
-        if op == "upsert":
-            uq = q.upsert(payload, on_conflict=on_conflict) if on_conflict else q.upsert(payload)
-            return uq.execute().data
-        if op == "update":
-            uq = q.update(payload)
-            for col, val in (match or {}).items():
-                uq = uq.eq(col, val)
-            return uq.execute().data
-        raise ValueError(f"알 수 없는 op: {op} (insert|update|upsert)")
+            self.assert_workspace_access(
+                planet,
+                _workspace_for_write(op, payload, match),
+                table,
+            )
+        return self._execute_write(
+            table,
+            op,
+            payload,
+            match=match,
+            on_conflict=on_conflict,
+        )
 
     def update_where(
         self,
@@ -116,11 +175,11 @@ class DataGovernor:
         if table in TENANCY_TABLES:
             ws = (match or {}).get("workspace_id")
             self.assert_workspace_access(planet, ws, table)
-        uq = self._c.table(table).update(payload)
-        for col, val in (match or {}).items():
-            uq = uq.eq(col, val)
-        for col, vals in (match_in or {}).items():
-            uq = uq.in_(col, list(vals) if not isinstance(vals, list) else vals)
+        uq = _apply_scope_filters(
+            self._c.table(table).update(payload),
+            match=match,
+            match_in=match_in,
+        )
         if or_filter:
             uq = uq.or_(or_filter)
         return uq.execute().data
@@ -152,24 +211,17 @@ class DataGovernor:
             raise OwnershipError(
                 f"'{table}'는 거버넌스 등록 테이블 아님 — delete() 거부."
             )
-        if table in CREATE_ONLY_TABLES:
-            self._assert(table, "delete", planet)
-        else:
-            # Prefer update permission; fall back to create (owners who materialize may prune).
-            try:
-                self._assert(table, "update", planet)
-            except OwnershipError:
-                self._assert(table, "create", planet)
+        # Prefer update permission; fall back to create (owners who materialize may prune).
+        self._assert_delete_permission(table, planet)
         if table in TENANCY_TABLES:
             ws = (match or {}).get("workspace_id")
             self.assert_workspace_access(planet, ws, table)
-        dq = self._c.table(table).delete()
-        for col, val in (match or {}).items():
-            dq = dq.eq(col, val)
-        for col, vals in (match_in or {}).items():
-            dq = dq.in_(col, list(vals) if not isinstance(vals, list) else vals)
-        for col, val in (match_lt or {}).items():
-            dq = dq.lt(col, val)
+        dq = _apply_scope_filters(
+            self._c.table(table).delete(),
+            match=match,
+            match_in=match_in,
+            match_lt=match_lt,
+        )
         return dq.execute().data
 
     # ── run ──
